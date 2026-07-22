@@ -880,7 +880,28 @@ export default function Home() {
     </div>
   </main>;
 }
+const MIN_REQUEST_INTERVAL_MS = 1_100;
 
+let requestStartGate: Promise<void> = Promise.resolve();
+let lastRequestStartedAt = 0;
+
+function waitForRequestSlot(): Promise<void> {
+  const slot = requestStartGate.then(async () => {
+    const elapsed = Date.now() - lastRequestStartedAt;
+    const delay = Math.max(0, MIN_REQUEST_INTERVAL_MS - elapsed);
+
+    if (delay > 0) {
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, delay);
+      });
+    }
+
+    lastRequestStartedAt = Date.now();
+  });
+
+  requestStartGate = slot.catch(() => undefined);
+  return slot;
+}
 const COMTRADE_PROXY = process.env.NEXT_PUBLIC_COMTRADE_PROXY_URL?.trim() ?? "";
 const PROXY_TIMEOUT_MS = 45_000;
 
@@ -898,6 +919,9 @@ async function fetchComtrade(body: {
       headers: { "Content-Type": "application/json" },
     });
   }
+
+  await waitForRequestSlot();
+  
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS);
   try {
