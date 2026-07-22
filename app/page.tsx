@@ -38,7 +38,7 @@ const reference = referenceJson as unknown as ReferenceData;
 // Keep every serverless response comfortably below common HTTP-function
 // payload limits. Large selections are still supported: the planner splits
 // them into a strictly sequential queue.
-const LIMIT = 50_000;
+const LIMIT = 20_000;
 const CODE_BATCH = 250;
 const PERIOD_BATCH = 12;
 const ALL_COUNTRIES = "__ALL_COUNTRIES__";
