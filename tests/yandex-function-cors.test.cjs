@@ -22,7 +22,7 @@ test("health check includes CORS and queue limit", async () => {
   assert.deepEqual(JSON.parse(result.body), {
     ok: true,
     service: "UN Comtrade proxy",
-    maxRecords: 10000,
+    maxRecords: 50000,
   });
 });
 
@@ -61,7 +61,7 @@ test("data request is forwarded to the official API with the serverless limit", 
     assert.equal(result.statusCode, 200);
     assert.match(requestedUrl, /^https:\/\/comtradeapi\.un\.org\/data\/v1\/get\/C\/A\/HS\?/);
     assert.match(requestedUrl, /reportercode=643/);
-    assert.match(requestedUrl, /maxRecords=10000/);
+    assert.match(requestedUrl, /maxRecords=50000/);
     assert.match(requestedUrl, /subscription-key=test-key/);
   } finally {
     global.fetch = originalFetch;
