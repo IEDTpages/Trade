@@ -35,7 +35,10 @@ type QueueRequest = { params: Record<string, string>; count: number };
 type QueueProgress = { phase: "idle" | "planning" | "loading"; completed: number; total: number; rows: number };
 
 const reference = referenceJson as unknown as ReferenceData;
-const LIMIT = 100_000;
+// Keep every serverless response comfortably below common HTTP-function
+// payload limits. Large selections are still supported: the planner splits
+// them into a strictly sequential queue.
+const LIMIT = 2_000;
 const CODE_BATCH = 250;
 const PERIOD_BATCH = 12;
 const ALL_COUNTRIES = "__ALL_COUNTRIES__";
@@ -538,7 +541,7 @@ export default function Home() {
   const directUrlParams = effectiveQueue.length ? effectiveQueue.map((item) => item.params) : requestParams;
   const directUrls = useMemo(() => directUrlParams.map((params) => {
     const endpoint = apiKey ? "https://comtradeapi.un.org/data/v1/get" : "https://comtradeapi.un.org/public/v1/preview";
-    const query = new URLSearchParams({ ...params, maxRecords: apiKey ? "100000" : "500", format: "JSON", includeDesc: "true" });
+    const query = new URLSearchParams({ ...params, maxRecords: apiKey ? String(LIMIT) : "500", format: "JSON", includeDesc: "true" });
     if (apiKey) query.set("subscription-key", "[ВАШ_API_КЛЮЧ]");
     return `${endpoint}/C/${freq}/HS?${query.toString()}`;
   }), [directUrlParams, apiKey, freq]);
@@ -776,7 +779,7 @@ export default function Home() {
         <div className="hero-stats"><div><b>{reference.meta.countries}</b><span>стран и территорий</span></div><div><b>{reference.meta.hs4.toLocaleString("ru-RU")}</b><span>групп HS4</span></div><div><b>{reference.meta.hs6.toLocaleString("ru-RU")}</b><span>позиций HS6</span></div></div>
       </section>
 
-      <nav className="pill-nav"><a href="#parameters" className="active">Параметры</a><a href="#request">Состав запроса</a><a href="#result">Аналитика</a><span>Лимит одного набора: 100 000 строк</span></nav>
+      <nav className="pill-nav"><a href="#parameters" className="active">Параметры</a><a href="#request">Состав запроса</a><a href="#result">Аналитика</a><span>Лимит одной части: {LIMIT.toLocaleString("ru-RU")} строк</span></nav>
 
       <div className="dashboard-grid">
         <section className="builder-column" id="parameters">
@@ -879,24 +882,43 @@ export default function Home() {
 }
 
 const COMTRADE_PROXY = process.env.NEXT_PUBLIC_COMTRADE_PROXY_URL?.trim() ?? "";
+const PROXY_TIMEOUT_MS = 45_000;
 
-function fetchComtrade(body: {
+async function fetchComtrade(body: {
   mode: "availability" | "count" | "data";
   freq: "A" | "M";
   params: Record<string, string>;
   subscriptionKey?: string;
 }) {
   if (!COMTRADE_PROXY) {
-    return Promise.resolve(new Response(JSON.stringify({
-      error: "Не задан адрес независимого прокси. Укажите переменную GitHub NEXT_PUBLIC_COMTRADE_PROXY_URL по инструкции README.",
+    return new Response(JSON.stringify({
+      error: "Не задан адрес прокси UN Comtrade. Укажите переменную GitHub NEXT_PUBLIC_COMTRADE_PROXY_URL по инструкции README.",
     }), {
       status: 503,
       headers: { "Content-Type": "application/json" },
-    }));
+    });
   }
-  return fetch(COMTRADE_PROXY, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify(body),
-  });
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS);
+  try {
+    return await fetch(COMTRADE_PROXY, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body),
+      cache: "no-store",
+      signal: controller.signal,
+    });
+  } catch (error) {
+    const timedOut = error instanceof DOMException && error.name === "AbortError";
+    return new Response(JSON.stringify({
+      error: timedOut
+        ? "Прокси не ответил за 45 секунд. Проверьте адрес функции и её доступность без VPN."
+        : `Не удалось подключиться к прокси: ${error instanceof Error ? error.message : "ошибка сети"}`,
+    }), {
+      status: timedOut ? 524 : 502,
+      headers: { "Content-Type": "application/json" },
+    });
+  } finally {
+    window.clearTimeout(timeout);
+  }
 }
