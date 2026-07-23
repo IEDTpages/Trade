@@ -25,7 +25,7 @@ function positiveInteger(value, fallback, maximum = Number.MAX_SAFE_INTEGER) {
 
 export function loadConfig(env = process.env) {
   return {
-    host: env.HOST || "0.0.0.0",
+    host: env.IP || env.HOST || "0.0.0.0",
     port: positiveInteger(env.PORT, 3000, 65_535),
     comtradeBaseUrl: (env.COMTRADE_BASE_URL || "https://comtradeapi.un.org").replace(/\/+$/, ""),
     maxRecords: positiveInteger(env.MAX_RECORDS, 50_000, 100_000),
@@ -33,8 +33,9 @@ export function loadConfig(env = process.env) {
     upstreamTimeoutMs: positiveInteger(env.UPSTREAM_TIMEOUT_MS, 180_000, 900_000),
     maxRetries: positiveInteger(env.MAX_RETRIES, 3, 8),
     cacheTtlMs: positiveInteger(env.CACHE_TTL_MS, 21_600_000, 86_400_000),
-    cacheMaxEntries: positiveInteger(env.CACHE_MAX_ENTRIES, 100, 5_000),
-    cacheMaxEntryBytes: positiveInteger(env.CACHE_MAX_ENTRY_BYTES, 26_214_400, 104_857_600),
+    cacheMaxEntries: positiveInteger(env.CACHE_MAX_ENTRIES, 50, 5_000),
+    cacheMaxEntryBytes: positiveInteger(env.CACHE_MAX_ENTRY_BYTES, 2_097_152, 104_857_600),
+    cacheMaxTotalBytes: positiveInteger(env.CACHE_MAX_TOTAL_BYTES, 33_554_432, 268_435_456),
     allowedOrigins: env.ALLOWED_ORIGINS || "*",
   };
 }
@@ -52,18 +53,27 @@ function parseRetryAfter(value) {
 }
 
 class MemoryCache {
-  constructor({ ttlMs, maxEntries, maxEntryBytes }) {
+  constructor({ ttlMs, maxEntries, maxEntryBytes, maxTotalBytes }) {
     this.ttlMs = ttlMs;
     this.maxEntries = maxEntries;
     this.maxEntryBytes = maxEntryBytes;
+    this.maxTotalBytes = maxTotalBytes;
+    this.totalBytes = 0;
     this.entries = new Map();
+  }
+
+  delete(key) {
+    const item = this.entries.get(key);
+    if (!item) return;
+    this.totalBytes = Math.max(0, this.totalBytes - item.body.byteLength);
+    this.entries.delete(key);
   }
 
   get(key) {
     const item = this.entries.get(key);
     if (!item) return null;
     if (item.expiresAt <= Date.now()) {
-      this.entries.delete(key);
+      this.delete(key);
       return null;
     }
     this.entries.delete(key);
@@ -73,15 +83,20 @@ class MemoryCache {
 
   set(key, item) {
     if (!item.body || item.body.byteLength > this.maxEntryBytes) return;
-    this.entries.delete(key);
+    this.delete(key);
     this.entries.set(key, { ...item, expiresAt: Date.now() + this.ttlMs });
-    while (this.entries.size > this.maxEntries) {
-      this.entries.delete(this.entries.keys().next().value);
+    this.totalBytes += item.body.byteLength;
+    while (this.entries.size > this.maxEntries || this.totalBytes > this.maxTotalBytes) {
+      this.delete(this.entries.keys().next().value);
     }
   }
 
   get size() {
     return this.entries.size;
+  }
+
+  get bytes() {
+    return this.totalBytes;
   }
 }
 
@@ -247,6 +262,7 @@ export function createApp(options = {}) {
     ttlMs: config.cacheTtlMs,
     maxEntries: config.cacheMaxEntries,
     maxEntryBytes: config.cacheMaxEntryBytes,
+    maxTotalBytes: config.cacheMaxTotalBytes,
   });
   const queue = createQueue(config.requestIntervalMs);
   const app = express();
@@ -263,6 +279,7 @@ export function createApp(options = {}) {
       requestIntervalMs: config.requestIntervalMs,
       queuePending: queue.pending,
       cacheEntries: cache.size,
+      cacheBytes: cache.bytes,
     });
   };
 
@@ -297,6 +314,19 @@ export function createApp(options = {}) {
     try {
       await queue.enqueue(async ({ waitForRequestSlot, queuedAt }) => {
         if (disconnectController.signal.aborted) return;
+
+        const queuedCacheHit = cache.get(parsed.cacheKey);
+        if (queuedCacheHit) {
+          setResponseHeaders(res, {
+            status: queuedCacheHit.status,
+            contentType: queuedCacheHit.contentType,
+            cacheStatus: "HIT",
+            queuedAt,
+          });
+          res.send(queuedCacheHit.body);
+          return;
+        }
+
         const upstream = await fetchWithRetries({
           url: parsed.url,
           fetchImpl,

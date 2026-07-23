@@ -900,7 +900,7 @@ async function fetchComtrade(body: {
     const timedOut = error instanceof DOMException && error.name === "AbortError";
     return new Response(JSON.stringify({
       error: timedOut
-        ? "Прокси не ответил за 5 минут. Проверьте состояние приложения Timeweb и его доступность без VPN."
+        ? "Прокси не ответил за 5 минут. Проверьте состояние приложения alwaysdata и адрес /health."
         : `Не удалось подключиться к прокси: ${error instanceof Error ? error.message : "ошибка сети"}`,
     }), {
       status: timedOut ? 524 : 502,

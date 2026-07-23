@@ -54,6 +54,12 @@ test("health and preflight include permissive CORS headers", async () => {
   assert.equal(preflight.headers.get("access-control-allow-origin"), "*");
 });
 
+test("alwaysdata IP environment variable is used as the listening address", () => {
+  const config = loadConfig({ IP: "::1", HOST: "127.0.0.1", PORT: "8080" });
+  assert.equal(config.host, "::1");
+  assert.equal(config.port, 8080);
+});
+
 test("authenticated data request uses maxRecords=50000 and never exposes the key", async () => {
   let requestedUrl = "";
   const base = await start(async (url) => {
@@ -172,4 +178,40 @@ test("large data responses bypass the in-memory cache and stream intact", async 
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("x-proxy-cache"), "BYPASS");
   assert.equal(await response.text(), body);
+});
+
+test("cache total size stays inside the free-hosting memory budget", async () => {
+  let calls = 0;
+  const base = await start(async (url) => {
+    calls += 1;
+    const period = new URL(String(url)).searchParams.get("period");
+    const body = JSON.stringify({ data: [{ period, payload: "x".repeat(700) }] });
+    return new Response(body, {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": String(Buffer.byteLength(body)),
+      },
+    });
+  }, {
+    cacheMaxEntryBytes: 2_048,
+    cacheMaxTotalBytes: 1_200,
+    cacheMaxEntries: 10,
+  });
+
+  for (const period of ["2022", "2023", "2024"]) {
+    await fetch(`${base}/api/comtrade`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...requestBody(),
+        params: { ...requestBody().params, period },
+      }),
+    });
+  }
+
+  const health = await fetch(`${base}/health`).then((response) => response.json());
+  assert.ok(health.cacheBytes <= 1_200);
+  assert.ok(health.cacheEntries < 3);
+  assert.equal(calls, 3);
 });
