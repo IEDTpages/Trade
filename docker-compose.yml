@@ -1,0 +1,32 @@
+services:
+  backend:
+    build:
+      context: ./comtrade-backend
+    restart: unless-stopped
+    environment:
+      MAX_RECORDS: "50000"
+      REQUEST_INTERVAL_MS: "1100"
+      UPSTREAM_TIMEOUT_MS: "180000"
+      MAX_RETRIES: "3"
+      ALLOWED_ORIGINS: "*"
+    expose:
+      - "3000"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      PROXY_DOMAIN: ${PROXY_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

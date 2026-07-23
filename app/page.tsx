@@ -35,10 +35,9 @@ type QueueRequest = { params: Record<string, string>; count: number };
 type QueueProgress = { phase: "idle" | "planning" | "loading"; completed: number; total: number; rows: number };
 
 const reference = referenceJson as unknown as ReferenceData;
-// Keep every serverless response comfortably below common HTTP-function
-// payload limits. Large selections are still supported: the planner splits
-// them into a strictly sequential queue.
-const LIMIT = 15_000;
+// The permanent backend has no Cloud Functions response-size limit, so each
+// authenticated Comtrade request can safely use a much larger batch.
+const LIMIT = 50_000;
 const CODE_BATCH = 250;
 const PERIOD_BATCH = 12;
 const ALL_COUNTRIES = "__ALL_COUNTRIES__";
@@ -368,10 +367,6 @@ function splitInHalf(values: string[]) {
   return [values.slice(0, middle), values.slice(middle)];
 }
 
-function wait(milliseconds: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
-}
-
 class ApiRequestError extends Error {
   status: number;
   constructor(message: string, status: number) {
@@ -562,18 +557,11 @@ export default function Home() {
   }, [country1, freq, availabilityKey]);
 
   async function callApi(mode: "count" | "data", params: Record<string, string>) {
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      const response = await fetchComtrade({ mode, freq, params, subscriptionKey: apiKey });
-      const payload = await response.json().catch(() => ({}));
-      if (response.ok) return payload;
-      const message = payload?.error || payload?.message || `HTTP ${response.status}`;
-      if ([429, 502, 503, 504].includes(response.status) && attempt < 3) {
-        await wait(800 * (2 ** attempt));
-        continue;
-      }
-      throw new ApiRequestError(message, response.status);
-    }
-    throw new ApiRequestError("UN Comtrade не ответил после повторных попыток.", 503);
+    const response = await fetchComtrade({ mode, freq, params, subscriptionKey: apiKey });
+    const payload = await response.json().catch(() => ({}));
+    if (response.ok) return payload;
+    const message = payload?.error || payload?.message || `HTTP ${response.status}`;
+    throw new ApiRequestError(message, response.status);
   }
 
   function splitRequest(params: Record<string, string>): [Record<string, string>, Record<string, string>] | null {
@@ -880,30 +868,9 @@ export default function Home() {
     </div>
   </main>;
 }
-const MIN_REQUEST_INTERVAL_MS = 1_100;
 
-let requestStartGate: Promise<void> = Promise.resolve();
-let lastRequestStartedAt = 0;
-
-function waitForRequestSlot(): Promise<void> {
-  const slot = requestStartGate.then(async () => {
-    const elapsed = Date.now() - lastRequestStartedAt;
-    const delay = Math.max(0, MIN_REQUEST_INTERVAL_MS - elapsed);
-
-    if (delay > 0) {
-      await new Promise<void>((resolve) => {
-        window.setTimeout(resolve, delay);
-      });
-    }
-
-    lastRequestStartedAt = Date.now();
-  });
-
-  requestStartGate = slot.catch(() => undefined);
-  return slot;
-}
 const COMTRADE_PROXY = process.env.NEXT_PUBLIC_COMTRADE_PROXY_URL?.trim() ?? "";
-const PROXY_TIMEOUT_MS = 45_000;
+const PROXY_TIMEOUT_MS = 300_000;
 
 async function fetchComtrade(body: {
   mode: "availability" | "count" | "data";
@@ -919,9 +886,6 @@ async function fetchComtrade(body: {
       headers: { "Content-Type": "application/json" },
     });
   }
-
-  await waitForRequestSlot();
-  
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS);
   try {
@@ -936,7 +900,7 @@ async function fetchComtrade(body: {
     const timedOut = error instanceof DOMException && error.name === "AbortError";
     return new Response(JSON.stringify({
       error: timedOut
-        ? "Прокси не ответил за 45 секунд. Проверьте адрес функции и её доступность без VPN."
+        ? "Прокси не ответил за 5 минут. Проверьте состояние приложения Timeweb и его доступность без VPN."
         : `Не удалось подключиться к прокси: ${error instanceof Error ? error.message : "ошибка сети"}`,
     }), {
       status: timedOut ? 524 : 502,

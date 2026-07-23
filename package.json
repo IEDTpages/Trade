@@ -10,8 +10,8 @@
     "build": "next build",
     "build:pages": "next build",
     "start": "next start",
-    "test": "npm run test:proxy",
-    "test:proxy": "node --test tests/yandex-function-cors.test.cjs",
+    "test": "npm run test:backend",
+    "test:backend": "npm --prefix comtrade-backend test",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },
   "dependencies": {
