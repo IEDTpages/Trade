@@ -54,7 +54,7 @@ test("health and preflight include permissive CORS headers", async () => {
   assert.equal(preflight.headers.get("access-control-allow-origin"), "*");
 });
 
-test("alwaysdata IP environment variable is used as the listening address", () => {
+test("IP environment variable has priority over HOST", () => {
   const config = loadConfig({ IP: "::1", HOST: "127.0.0.1", PORT: "8080" });
   assert.equal(config.host, "::1");
   assert.equal(config.port, 8080);
@@ -180,7 +180,7 @@ test("large data responses bypass the in-memory cache and stream intact", async 
   assert.equal(await response.text(), body);
 });
 
-test("cache total size stays inside the free-hosting memory budget", async () => {
+test("cache total size stays inside the configured memory budget", async () => {
   let calls = 0;
   const base = await start(async (url) => {
     calls += 1;

@@ -258,6 +258,7 @@ function setResponseHeaders(res, { status, contentType, cacheStatus, queuedAt })
 export function createApp(options = {}) {
   const config = options.config || loadConfig();
   const fetchImpl = options.fetchImpl || globalThis.fetch;
+  const staticDir = options.staticDir || "";
   const cache = new MemoryCache({
     ttlMs: config.cacheTtlMs,
     maxEntries: config.cacheMaxEntries,
@@ -283,7 +284,7 @@ export function createApp(options = {}) {
     });
   };
 
-  app.get("/", health);
+  if (!staticDir) app.get("/", health);
   app.get("/health", health);
   app.get("/api/comtrade", health);
 
@@ -379,6 +380,14 @@ export function createApp(options = {}) {
       });
     }
   });
+
+  if (staticDir) {
+    app.use(express.static(staticDir, {
+      etag: true,
+      index: "index.html",
+      maxAge: "1h",
+    }));
+  }
 
   // Express recognises an error handler by its four-argument signature.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
